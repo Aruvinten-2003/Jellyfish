@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Jellyfish</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --text: rgba(234, 249, 255, 0.92);
+        --muted: rgba(190, 222, 235, 0.64);
+        --glass: rgba(9, 21, 37, 0.38);
+        --line: rgba(170, 230, 255, 0.18);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #020712;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+      }
+
+      #jellyfish-stage {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      canvas {
+        display: block;
+      }
+
+      .controls {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 2;
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--glass);
+        -webkit-backdrop-filter: blur(18px);
+        backdrop-filter: blur(18px);
+        box-shadow: 0 16px 50px rgba(0, 0, 0, 0.26);
+      }
+
+      .control-button {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border: 1px solid transparent;
+        border-radius: 50%;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.06);
+        cursor: pointer;
+        transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+      }
+
+      .control-button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(184, 239, 255, 0.34);
+        background: rgba(104, 196, 224, 0.16);
+      }
+
+      .control-button:focus-visible {
+        outline: 2px solid rgba(145, 236, 255, 0.9);
+        outline-offset: 3px;
+      }
+
+      .control-button svg {
+        width: 18px;
+        height: 18px;
+        stroke-width: 1.8;
+      }
+
+      .status {
+        position: fixed;
+        left: 18px;
+        bottom: 22px;
+        z-index: 2;
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0;
+        opacity: 0.78;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      .fallback {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: var(--text);
+        text-align: center;
+        background:
+          radial-gradient(circle at 50% 35%, rgba(67, 199, 219, 0.18), transparent 30%),
+          linear-gradient(180deg, #061327 0%, #020712 100%);
+      }
+
+      @media (max-width: 640px) {
+        .controls {
+          right: 12px;
+          bottom: 12px;
+        }
+
+        .status {
+          left: 12px;
+          bottom: 18px;
+          max-width: calc(100vw - 150px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="jellyfish-stage" aria-label="Animated jellyfish canvas"></div>
+
+    <div class="status" aria-live="polite">Move pointer to steer the current</div>
+
+    <div class="controls" aria-label="Jellyfish controls">
+      <button class="control-button" id="pauseButton" type="button" aria-label="Pause animation" title="Pause">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M9 5v14" />
+          <path d="M15 5v14" />
+        </svg>
+      </button>
+      <button class="control-button" id="resetButton" type="button" aria-label="Reset current" title="Reset">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v6h6" />
+        </svg>
+      </button>
+      <button class="control-button" id="fullscreenButton" type="button" aria-label="Enter fullscreen" title="Fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M8 3H3v5" />
+          <path d="M16 3h5v5" />
+          <path d="M8 21H3v-5" />
+          <path d="M16 21h5v-5" />
+        </svg>
+      </button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+    <script>
+      const stage = document.getElementById("jellyfish-stage");
+      const pauseButton = document.getElementById("pauseButton");
+      const resetButton = document.getElementById("resetButton");
+      const fullscreenButton = document.getElementById("fullscreenButton");
+
+      if (!window.p5) {
+        document.body.innerHTML = '<div class="fallback"><p>p5.js could not load. Connect to the internet and refresh this file to start the jellyfish animation.</p></div>';
+      } else {
+        const sketch = (p) => {
+          const tentacles = [];
+          const particles = [];
+          let paused = false;
+          let drift = { x: 0, y: 0 };
+          let jelly = { x: 0, y: 0, z: 0, vx: 0, vy: 0 };
+
+          p.setup = () => {
+            const canvas = p.createCanvas(p.windowWidth, p.windowHeight, p.WEBGL);
+            canvas.parent(stage);
+            p.pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
+            resetScene();
+          };
+
+          p.windowResized = () => {
+            p.resizeCanvas(p.windowWidth, p.windowHeight);
+            resetScene(false);
+          };
+
+          p.draw = () => {
+            if (paused) return;
+            drawWater();
+            updateJellyfish();
+            drawParticles();
+            drawJellyfish();
+          };
+
+          p.mouseMoved = () => {
+            const nx = (p.mouseX / Math.max(p.width, 1) - 0.5) * 2;
+            const ny = (p.mouseY / Math.max(p.height, 1) - 0.5) * 2;
+            drift.x = p.lerp(drift.x, nx, 0.18);
+            drift.y = p.lerp(drift.y, ny, 0.12);
+          };
+
+          function resetScene(rebuildParticles = true) {
+            const scale = getSceneScale();
+            jelly = { x: 0, y: -24 * scale, z: 0, vx: 0, vy: 0 };
+            drift = { x: 0, y: 0 };
+            tentacles.length = 0;
+
+            const count = p.width < 680 ? 42 : 64;
+            for (let i = 0; i < count; i += 1) {
+              const anchor = p.map(i, 0, count - 1, -82 * scale, 118 * scale);
+              tentacles.push({
+                anchor,
+                length: p.random(240, 520) * scale,
+                phase: p.random(p.TWO_PI),
+                hue: p.random(0.86, 1.28),
+                width: p.random(0.32, 1.75) * scale,
+                sweep: p.random(0.45, 1.45),
+                segments: Array.from({ length: 34 }, () => ({ x: 0, y: 0, vx: 0, vy: 0 }))
+              });
+            }
+
+            if (rebuildParticles) {
+              particles.length = 0;
+              for (let i = 0; i < 150; i += 1) {
+                particles.push(makeParticle(true));
+              }
+            }
+          }
+
+          function makeParticle(scattered = false) {
+            const depth = p.random(0.15, 1);
+            return {
+              x: p.random(-p.width * 0.6, p.width * 0.6),
+              y: scattered ? p.random(-p.height * 0.55, p.height * 0.55) : p.height * 0.58,
+              z: p.random(-480, 140),
+              depth,
+              speed: p.random(0.08, 0.42) * depth,
+              size: p.random(0.8, 2.6) * depth,
+              alpha: p.random(20, 90) * depth
+            };
+          }
+
+          function getSceneScale() {
+            return p.constrain(Math.min(p.width, p.height) / 760, 0.58, 1.12);
+          }
+
+          function drawWater() {
+            p.background(0, 2, 13);
+            p.push();
+            p.noStroke();
+
+            for (let i = 0; i < 9; i += 1) {
+              const radius = Math.max(p.width, p.height) * (0.35 + i * 0.08);
+              const alpha = 11 - i * 0.9;
+              p.fill(0, 14 + i * 2, 42 + i * 6, alpha);
+              p.ellipse(0, -p.height * 0.28 + i * 32, radius * 1.7, radius * 0.72);
+            }
+
+            const sweep = p.sin(p.frameCount * 0.006) * p.width * 0.12;
+            p.fill(0, 49, 136, 18);
+            p.ellipse(sweep, -p.height * 0.12, p.width * 0.76, p.height * 0.48);
+            p.fill(0, 111, 255, 8);
+            p.ellipse(-sweep * 0.8, p.height * 0.08, p.width * 0.44, p.height * 0.42);
+            p.pop();
+            drawBackgroundFilaments();
+          }
+
+          function updateJellyfish() {
+            const scale = getSceneScale();
+            const t = p.frameCount * 0.018;
+            const targetX = drift.x * 72 * scale + p.sin(t * 0.7) * 34 * scale;
+            const targetY = -34 * scale + drift.y * 34 * scale + p.sin(t * 1.1) * 16 * scale;
+            jelly.vx += (targetX - jelly.x) * 0.008;
+            jelly.vy += (targetY - jelly.y) * 0.008;
+            jelly.vx *= 0.94;
+            jelly.vy *= 0.94;
+            jelly.x += jelly.vx;
+            jelly.y += jelly.vy;
+            jelly.z = p.sin(t * 0.8) * 22 * scale;
+          }
+
+          function drawParticles() {
+            p.push();
+            p.noStroke();
+            for (const particle of particles) {
+              particle.y -= particle.speed + drift.y * 0.05;
+              particle.x += p.sin(p.frameCount * 0.008 + particle.depth * 8) * 0.08 + drift.x * 0.16;
+              if (particle.y < -p.height * 0.6) Object.assign(particle, makeParticle(false));
+
+              p.push();
+              p.translate(particle.x, particle.y, particle.z);
+              p.fill(144, 231, 244, particle.alpha);
+              p.sphere(particle.size, 6, 4);
+              p.pop();
+            }
+            p.pop();
+          }
+
+          function drawJellyfish() {
+            const scale = getSceneScale();
+            const t = p.frameCount * 0.035;
+            const pulse = 1 + p.sin(t) * 0.055;
+
+            p.push();
+            p.translate(jelly.x + 58 * scale, jelly.y - 30 * scale, jelly.z);
+            p.rotateZ(-0.04 + p.sin(t * 0.45) * 0.025);
+            p.rotateY(-0.46 + p.sin(t * 0.35) * 0.08 + drift.x * 0.04);
+            p.rotateX(p.sin(t * 0.43) * 0.04 - drift.y * 0.035);
+
+            drawGlow(scale, pulse);
+            drawTentacles(scale, t);
+            drawBell(scale, pulse, t);
+            drawOralArms(scale, t);
+            p.pop();
+          }
+
+          function drawGlow(scale, pulse) {
+            p.push();
+            p.noStroke();
+            p.fill(0, 115, 255, 28);
+            p.ellipsoid(208 * scale * pulse, 90 * scale, 142 * scale, 34, 14);
+            p.fill(0, 59, 210, 16);
+            p.ellipsoid(292 * scale, 122 * scale, 196 * scale, 34, 14);
+            p.pop();
+          }
+
+          function drawBell(scale, pulse, t) {
+            p.push();
+            p.noStroke();
+            p.fill(33, 161, 255, 74);
+            p.beginShape();
+            p.curveVertex(-126 * scale * pulse, 38 * scale, 8 * scale);
+            p.curveVertex(-126 * scale * pulse, 38 * scale, 8 * scale);
+            p.curveVertex(-104 * scale, -7 * scale, 18 * scale);
+            p.curveVertex(-48 * scale, -54 * scale, 34 * scale);
+            p.curveVertex(26 * scale, -67 * scale, 36 * scale);
+            p.curveVertex(96 * scale, -42 * scale, 22 * scale);
+            p.curveVertex(135 * scale, 6 * scale, 8 * scale);
+            p.curveVertex(112 * scale, 48 * scale, 4 * scale);
+            p.curveVertex(42 * scale, 60 * scale, 0);
+            p.curveVertex(-48 * scale, 58 * scale, 0);
+            p.curveVertex(-126 * scale * pulse, 38 * scale, 8 * scale);
+            p.curveVertex(-126 * scale * pulse, 38 * scale, 8 * scale);
+            p.endShape();
+
+            p.fill(220, 244, 255, 76);
+            p.beginShape();
+            p.curveVertex(-78 * scale, 12 * scale, 44 * scale);
+            p.curveVertex(-78 * scale, 12 * scale, 44 * scale);
+            p.curveVertex(-34 * scale, -35 * scale, 66 * scale);
+            p.curveVertex(34 * scale, -46 * scale, 62 * scale);
+            p.curveVertex(94 * scale, -14 * scale, 34 * scale);
+            p.curveVertex(82 * scale, 26 * scale, 26 * scale);
+            p.curveVertex(18 * scale, 37 * scale, 34 * scale);
+            p.curveVertex(-52 * scale, 32 * scale, 38 * scale);
+            p.curveVertex(-78 * scale, 12 * scale, 44 * scale);
+            p.curveVertex(-78 * scale, 12 * scale, 44 * scale);
+            p.endShape();
+            p.pop();
+
+            drawBellRibs(scale, pulse, t);
+            drawScallopedRim(scale, pulse, t);
+          }
+
+          function drawBellRibs(scale, pulse, t) {
+            p.push();
+            p.noFill();
+            for (let i = 0; i < 15; i += 1) {
+              const ratio = i / 14;
+              const x = p.lerp(-88, 104, ratio) * scale;
+              const topY = (-18 - p.sin(ratio * p.PI) * 42) * scale;
+              const bottomY = (33 + p.sin(ratio * p.PI) * 16) * scale;
+              p.stroke(201, 236, 255, 86);
+              p.strokeWeight((1.05 + p.sin(ratio * p.PI) * 0.65) * scale);
+              p.beginShape();
+              for (let y = topY / scale; y <= bottomY / scale; y += 8) {
+                const yy = y * scale;
+                const bend = p.sin(y * 0.05 + t + ratio * 2.8) * 4 * scale;
+                const dome = p.sin(ratio * p.PI) * p.sin((y + 24) * 0.035) * 10 * scale;
+                p.curveVertex(x + bend + dome, yy, 62 * scale);
+              }
+              p.endShape();
+            }
+            p.pop();
+          }
+
+          function drawBackgroundFilaments() {
+            p.push();
+            p.noFill();
+            for (let strand = 0; strand < 9; strand += 1) {
+              const baseX = -p.width * 0.48 + strand * 18;
+              const baseY = -p.height * 0.68 + strand * 36;
+              p.stroke(0, 67, 220, 26 - strand);
+              p.strokeWeight(1.4 + strand * 0.18);
+              p.beginShape();
+              for (let k = 0; k < 90; k += 1) {
+                const y = baseY + k * 12;
+                const x = baseX + p.sin(k * 0.11 + strand + p.frameCount * 0.005) * 56 + k * 1.4;
+                p.curveVertex(x, y);
+              }
+              p.endShape();
+            }
+            p.pop();
+          }
+
+          function drawScallopedRim(scale, pulse, t) {
+            p.push();
+            p.noFill();
+            p.stroke(148, 219, 255, 120);
+            p.strokeWeight(2.6 * scale);
+            p.beginShape();
+            for (let i = 0; i <= 42; i += 1) {
+              const ratio = i / 42;
+              const x = p.lerp(-126, 120, ratio) * scale * pulse;
+              const sag = p.sin(ratio * p.PI) * 18;
+              const scallop = p.sin(ratio * p.PI * 15 + t * 0.7) * 5;
+              const y = (38 + sag + scallop) * scale;
+              p.curveVertex(x, y, 28 * scale);
+            }
+            p.endShape();
+            p.pop();
+          }
+
+          function drawTentacles(scale, t) {
+            p.push();
+            for (const strand of tentacles) {
+              const sideBias = p.map(strand.anchor / scale, -82, 118, -0.2, 1);
+              const rootX = strand.anchor + p.sin(t + strand.phase) * 5 * scale;
+              const rootY = (48 + p.sin(sideBias * p.PI) * 16) * scale + p.cos(t * 0.8 + strand.phase) * 3 * scale;
+              let previous = { x: rootX, y: rootY };
+
+              for (let i = 0; i < strand.segments.length; i += 1) {
+                const node = strand.segments[i];
+                const ratio = i / (strand.segments.length - 1);
+                const wave = p.sin(t * 1.08 + strand.phase + ratio * 10.4) * (5 + ratio * 42) * scale;
+                const crossCurrent = p.sin(t * 0.36 + strand.phase * 1.7 + ratio * 4) * ratio * 28 * scale;
+                const longSweep = ratio * ratio * 148 * scale * strand.sweep;
+                const targetX = rootX + wave + crossCurrent + longSweep + drift.x * ratio * 80 * scale;
+                const targetY = rootY + ratio * strand.length + p.sin(t + ratio * 4 + strand.phase) * 5 * scale;
+                node.vx += (targetX - node.x) * 0.028;
+                node.vy += (targetY - node.y) * 0.03;
+                node.vx *= 0.7;
+                node.vy *= 0.7;
+                node.x += node.vx;
+                node.y += node.vy;
+
+                p.stroke(
+                  0,
+                  146 + 74 * strand.hue,
+                  255,
+                  p.map(ratio, 0, 1, 150, 12)
+                );
+                p.strokeWeight(p.max(0.16, strand.width * (1 - ratio * 0.82)));
+                p.line(previous.x, previous.y, node.x, node.y);
+                previous = node;
+              }
+            }
+            p.pop();
+          }
+
+          function drawOralArms(scale, t) {
+            p.push();
+            p.noFill();
+            for (let i = -3; i <= 4; i += 1) {
+              p.stroke(0, 174, 255, 66);
+              p.strokeWeight((6.2 - Math.abs(i) * 0.52) * scale);
+              p.beginShape();
+              for (let y = 50; y < 318; y += 13) {
+                const ratio = (y - 50) / 268;
+                const x = (i * 13 + ratio * 44) * scale + p.sin(t * 0.86 + ratio * 7 + i) * (9 + ratio * 28) * scale;
+                p.curveVertex(x, y * scale, p.sin(t + ratio * 3 + i) * 14 * scale);
+              }
+              p.endShape();
+            }
+            p.pop();
+          }
+
+          pauseButton.addEventListener("click", () => {
+            paused = !paused;
+            pauseButton.setAttribute("aria-label", paused ? "Resume animation" : "Pause animation");
+            pauseButton.title = paused ? "Resume" : "Pause";
+            if (!paused) p.loop();
+          });
+
+          resetButton.addEventListener("click", () => resetScene());
+
+          fullscreenButton.addEventListener("click", async () => {
+            if (!document.fullscreenElement) {
+              await document.documentElement.requestFullscreen();
+            } else {
+              await document.exitFullscreen();
+            }
+          });
+        };
+
+        new p5(sketch);
+      }
+    </script>
+  </body>
+</html>
